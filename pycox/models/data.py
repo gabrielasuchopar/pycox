@@ -37,16 +37,17 @@ def make_at_risk_dict(durations, starts=None):
     allidx = durations.index.values
     keys = durations.drop_duplicates(keep='first')
     at_risk_dict = dict()
-    for ix, t in keys.iteritems():
-        at_risk_dict[t] = allidx[ix:]
 
     if starts is not None:
         assert type(starts) is np.ndarray, 'Need starts to be a numpy array'
         start_ids = np.argsort(starts)
         starts = starts[start_ids]
 
-        times = list(at_risk_dict.keys())
-        for t in times:
+
+    for ix, t in keys.iteritems():
+        at_risk_dict[t] = allidx[ix:]
+
+        if starts is not None:
             invalids = starts > t
             min_id = np.argmax(invalids)
             # no need to drop anything anymore
