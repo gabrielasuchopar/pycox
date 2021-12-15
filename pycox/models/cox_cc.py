@@ -11,9 +11,9 @@ class _CoxCCBase(models.cox._CoxBase):
             loss = models.loss.CoxCCLoss(shrink)
         super().__init__(net, loss, optimizer, device)
 
-    def fit(self, input, target, starts=None, batch_size=256, epochs=1, callbacks=None, verbose=True,
+    def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
             num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
-            n_control=1, shrink=None, **kwargs):
+            n_control=1, shrink=None, starts=None, **kwargs):
         """Fit  model with inputs and targets. Where 'input' is the covariates, and
         'target' is a tuple with (durations, events).
         
