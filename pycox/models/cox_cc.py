@@ -11,7 +11,7 @@ class _CoxCCBase(models.cox._CoxBase):
             loss = models.loss.CoxCCLoss(shrink)
         super().__init__(net, loss, optimizer, device)
 
-    def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
+    def fit(self, input, target, starts=None, batch_size=256, epochs=1, callbacks=None, verbose=True,
             num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
             n_control=1, shrink=None, **kwargs):
         """Fit  model with inputs and targets. Where 'input' is the covariates, and
@@ -39,7 +39,7 @@ class _CoxCCBase(models.cox._CoxBase):
             self.loss.shrink = shrink
         return super().fit(input, target, batch_size, epochs, callbacks, verbose,
                            num_workers, shuffle, metrics, val_data, val_batch_size,
-                           n_control=n_control, **kwargs)
+                           n_control=n_control, starts=starts, **kwargs)
 
     def compute_metrics(self, input, metrics):
         if (self.loss is None) and (self.loss in metrics.values()):
@@ -75,7 +75,7 @@ class _CoxCCBase(models.cox._CoxBase):
         dataloader = super().make_dataloader(input, batch_size, shuffle, num_workers)
         return dataloader
     
-    def make_dataloader(self, data, batch_size, shuffle=True, num_workers=0, n_control=1):
+    def make_dataloader(self, data, batch_size, shuffle=True, num_workers=0, n_control=1, starts=None):
         """Dataloader for training. Data is on the form (input, target), where
         target is (durations, events).
         
@@ -93,7 +93,7 @@ class _CoxCCBase(models.cox._CoxBase):
         """
         input, target = self._sorted_input_target(*data)
         durations, events = target
-        dataset = self.make_dataset(input, durations, events, n_control)
+        dataset = self.make_dataset(input, durations, events, n_control=n_control, starts=starts)
         dataloader = tt.data.DataLoaderBatch(dataset, batch_size=batch_size,
                                              shuffle=shuffle, num_workers=num_workers)
         return dataloader

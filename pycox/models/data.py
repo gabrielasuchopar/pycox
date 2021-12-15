@@ -21,13 +21,15 @@ def sample_alive_from_dates(dates, at_risk_dict, n_control=1):
         samp[it, :] = at_risk_dict[time][idx[:, it]]
     return samp
 
-def make_at_risk_dict(durations):
+def make_at_risk_dict(durations, starts=None):
     """Create dict(duration: indices) from sorted df.
     A dict mapping durations to indices.
     For each time => index of all individual alive.
+    If `starts` is provided, the "birthdate" of an event is considered.
     
     Arguments:
-        durations {np.arrary} -- durations.
+        durations {np.array} -- durations.
+        starts {np.array} -- event starts.
     """
     assert type(durations) is np.ndarray, 'Need durations to be a numpy array'
     durations = pd.Series(durations)
@@ -37,6 +39,23 @@ def make_at_risk_dict(durations):
     at_risk_dict = dict()
     for ix, t in keys.iteritems():
         at_risk_dict[t] = allidx[ix:]
+
+    if starts is not None:
+        assert type(starts) is np.ndarray, 'Need starts to be a numpy array'
+        start_ids = np.argsort(starts)
+        starts = starts[start_ids]
+
+        times = list(at_risk_dict.keys())
+        for t in times:
+            invalids = starts > t
+            min_id = np.argmax(invalids)
+            # no need to drop anything anymore
+            if not invalids[min_id]:
+                break
+
+            drop_ids = start_ids[min_id:]
+            at_risk_dict[t] = np.setdiff1d(at_risk_dict[t], drop_ids)
+
     return at_risk_dict
 
 
@@ -56,10 +75,10 @@ class DurationSortedDataset(tt.data.DatasetTuple):
 
 
 class CoxCCDataset(torch.utils.data.Dataset):
-    def __init__(self, input, durations, events, n_control=1):
+    def __init__(self, input, durations, events, n_control=1, starts=None):
         df_train_target = pd.DataFrame(dict(duration=durations, event=events))
         self.durations = df_train_target.loc[lambda x: x['event'] == 1]['duration']
-        self.at_risk_dict = make_at_risk_dict(durations)
+        self.at_risk_dict = make_at_risk_dict(durations, starts=starts)
 
         self.input = tt.tuplefy(input)
         assert type(self.durations) is pd.Series
@@ -79,8 +98,8 @@ class CoxCCDataset(torch.utils.data.Dataset):
 
 
 class CoxTimeDataset(CoxCCDataset):
-    def __init__(self, input, durations, events, n_control=1):
-        super().__init__(input, durations, events, n_control)
+    def __init__(self, input, durations, events, n_control=1, starts=None):
+        super().__init__(input, durations, events, n_control, starts=starts)
         self.durations_tensor = tt.tuplefy(self.durations.values.reshape(-1, 1)).to_tensor()
 
     def __getitem__(self, index):
