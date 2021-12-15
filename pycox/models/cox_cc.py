@@ -13,7 +13,7 @@ class _CoxCCBase(models.cox._CoxBase):
 
     def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
             num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
-            n_control=1, shrink=None, starts=None, **kwargs):
+            n_control=1, shrink=None, use_starts=False, **kwargs):
         """Fit  model with inputs and targets. Where 'input' is the covariates, and
         'target' is a tuple with (durations, events).
         
@@ -34,12 +34,15 @@ class _CoxCCBase(models.cox._CoxBase):
         Returns:
             TrainingLogger -- Training log
         """
+        target, starts = self.split_target_starts(target) if use_starts else (target, None)
         input, target = self._sorted_input_target(input, target)
+        target = (*target, starts) if starts is not None else target
+
         if shrink is not None:
             self.loss.shrink = shrink
         return super().fit(input, target, batch_size, epochs, callbacks, verbose,
                            num_workers, shuffle, metrics, val_data, val_batch_size,
-                           n_control=n_control, starts=starts, **kwargs)
+                           n_control=n_control, use_starts=use_starts, **kwargs)
 
     def compute_metrics(self, input, metrics):
         if (self.loss is None) and (self.loss in metrics.values()):
@@ -74,8 +77,15 @@ class _CoxCCBase(models.cox._CoxBase):
         """
         dataloader = super().make_dataloader(input, batch_size, shuffle, num_workers)
         return dataloader
-    
-    def make_dataloader(self, data, batch_size, shuffle=True, num_workers=0, n_control=1, starts=None):
+
+    @staticmethod
+    def split_target_starts(target):
+        # get starts from target if applicable
+        durations, events, starts = target
+        target = durations, events
+        return target, starts
+
+    def make_dataloader(self, data, batch_size, shuffle=True, num_workers=0, n_control=1, use_starts=False):
         """Dataloader for training. Data is on the form (input, target), where
         target is (durations, events).
         
@@ -91,8 +101,12 @@ class _CoxCCBase(models.cox._CoxBase):
         Returns:
             dataloader -- Dataloader for training.
         """
-        input, target = self._sorted_input_target(*data)
+        input, target = data
+        target, starts = self.split_target_starts(target) if use_starts else (target, None)
+
+        input, target = self._sorted_input_target(input, target)
         durations, events = target
+
         dataset = self.make_dataset(input, durations, events, n_control=n_control, starts=starts)
         dataloader = tt.data.DataLoaderBatch(dataset, batch_size=batch_size,
                                              shuffle=shuffle, num_workers=num_workers)

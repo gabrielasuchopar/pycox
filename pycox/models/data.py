@@ -43,8 +43,8 @@ def make_at_risk_dict(durations, starts=None):
         start_ids = np.argsort(starts)
         starts = starts[start_ids]
 
-
-    for ix, t in keys.iteritems():
+    for i, (ix, t) in enumerate(keys.iteritems()):
+        print(i, ix, t)
         at_risk_dict[t] = allidx[ix:]
 
         if starts is not None:
