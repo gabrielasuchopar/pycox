@@ -76,9 +76,12 @@ class DurationSortedDataset(tt.data.DatasetTuple):
 
 
 class CoxCCDataset(torch.utils.data.Dataset):
-    def __init__(self, input, durations, events, n_control=1, starts=None):
+    def __init__(self, input, durations, events, n_control=1, starts=None, vaccmap=None):
         df_train_target = pd.DataFrame(dict(duration=durations, event=events))
-        self.durations = df_train_target.loc[lambda x: x['event'] == 1]['duration']
+        happened = df_train_target.loc[lambda x: x['event'] == 1]
+        self.vaccmap = vaccmap.iloc[happened.index]
+
+        self.durations = happened['duration']
         self.at_risk_dict = make_at_risk_dict(durations, starts=starts)
 
         self.input = tt.tuplefy(input)
@@ -99,14 +102,19 @@ class CoxCCDataset(torch.utils.data.Dataset):
 
 
 class CoxTimeDataset(CoxCCDataset):
-    def __init__(self, input, durations, events, n_control=1, starts=None):
-        super().__init__(input, durations, events, n_control, starts=starts)
+    def __init__(self, input, durations, events, n_control=1, starts=None, vaccmap=None, dummy_val=-10):
+        super().__init__(input, durations, events, n_control, starts=starts, vaccmap=vaccmap)
         self.durations_tensor = tt.tuplefy(self.durations.values.reshape(-1, 1)).to_tensor()
+        self.dummy_val = dummy_val
 
     def __getitem__(self, index):
         if not hasattr(index, '__iter__'):
             index = [index]
         durations = self.durations_tensor.iloc[index]
+        is_vacc = self.vaccmap.iloc[index]
+
+        durations[0][(~is_vacc).to_numpy()] = self.dummy_val
+
         case, control = super().__getitem__(index)
         case = case + durations
         control = control.apply_nrec(lambda x: x + durations)
