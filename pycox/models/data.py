@@ -52,7 +52,7 @@ def make_at_risk_dict(durations, starts=None):
             min_id = np.argmax(invalids)
             # no need to drop anything anymore
             if not invalids[min_id]:
-                break
+                continue
 
             drop_ids = start_ids[min_id:]
             at_risk_dict[t] = np.setdiff1d(at_risk_dict[t], drop_ids)
