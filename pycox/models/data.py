@@ -78,15 +78,17 @@ class DurationSortedDataset(tt.data.DatasetTuple):
 class CoxCCDataset(torch.utils.data.Dataset):
     def __init__(self, input, durations, events, n_control=1, starts=None, vaccmap=None):
         df_train_target = pd.DataFrame(dict(duration=durations, event=events))
-        happened = df_train_target.loc[lambda x: x['event'] == 1]
-        self.vaccmap = vaccmap.iloc[happened.index]
-
-        self.durations = happened['duration']
+        self.durations = df_train_target.loc[lambda x: x['event'] == 1]['duration']
         self.at_risk_dict = make_at_risk_dict(durations, starts=starts)
 
         self.input = tt.tuplefy(input)
         assert type(self.durations) is pd.Series
         self.n_control = n_control
+
+        if vaccmap.dtype == np.bool:
+            self.vaccmap = (~vaccmap).astype(int).to_numpy()
+        else:
+            self.vaccmap = vaccmap
 
     def __getitem__(self, index):
         if (not hasattr(index, '__iter__')) and (type(index) is not slice):
@@ -95,6 +97,11 @@ class CoxCCDataset(torch.utils.data.Dataset):
         x_case = self.input.iloc[fails.index]
         control_idx = sample_alive_from_dates(fails.values, self.at_risk_dict, self.n_control)
         x_control = tt.TupleTree(self.input.iloc[idx] for idx in control_idx.transpose())
+
+        if self.vaccmap is not None:
+            case_vacc, control_vacc = self.vaccmap[fails.index], self.vaccmap[control_idx]
+            return tt.tuplefy(x_case, x_control, case_vacc, control_vacc).to_tensor()
+
         return tt.tuplefy(x_case, x_control).to_tensor()
 
     def __len__(self):
@@ -110,15 +117,31 @@ class CoxTimeDataset(CoxCCDataset):
     def __getitem__(self, index):
         if not hasattr(index, '__iter__'):
             index = [index]
-        durations = self.durations_tensor.iloc[index]
-        is_vacc = self.vaccmap.iloc[index]
+        durations = self.durations_tensor.iloc[index][0]
 
-        durations[0][(~is_vacc).to_numpy()] = self.dummy_val
+        if self.vaccmap is None:
+            case, control = super().__getitem__(index)
+            case = case + durations
+            control = control.apply_nrec(lambda x: x + durations)
+        else:
+            # mask unvaccinated durations with a dummy value
+            case, control, case_vacc, control_vacc = super().__getitem__(index)
+            case = case + mask_duration(durations, case_vacc, dummy=self.dummy_val)
+            control = tt.TupleTree(control[idx] + mask_duration(durations, control_vacc[idx], dummy=self.dummy_val)
+                                   for idx in range(len(control)))
 
-        case, control = super().__getitem__(index)
-        case = case + durations
-        control = control.apply_nrec(lambda x: x + durations)
         return tt.tuplefy(case, control)
+
+
+def mask_duration(dur, vaccmap, dummy=-10):
+    dur = dur.detach().clone()
+    if len(vaccmap) != len(dur):
+        return tt.tuplefy(dur)
+
+    vaccmap = np.nonzero(vaccmap)
+    dur[vaccmap] = dummy
+    return tt.tuplefy(dur)
+
 
 @numba.njit
 def _pair_rank_mat(mat, idx_durations, events, dtype='float32'):
