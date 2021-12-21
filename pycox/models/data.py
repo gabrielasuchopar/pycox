@@ -76,7 +76,7 @@ class DurationSortedDataset(tt.data.DatasetTuple):
 
 
 class CoxCCDataset(torch.utils.data.Dataset):
-    def __init__(self, input, durations, events, n_control=1, starts=None, vaccmap=None):
+    def __init__(self, input, durations, events, n_control=1, starts=None, durs_shifted=None):
         df_train_target = pd.DataFrame(dict(duration=durations, event=events))
         self.durations = df_train_target.loc[lambda x: x['event'] == 1]['duration']
         self.at_risk_dict = make_at_risk_dict(durations, starts=starts)
@@ -85,10 +85,7 @@ class CoxCCDataset(torch.utils.data.Dataset):
         assert type(self.durations) is pd.Series
         self.n_control = n_control
 
-        if vaccmap.dtype == np.bool:
-            self.vaccmap = (~vaccmap).astype(int).to_numpy()
-        else:
-            self.vaccmap = vaccmap
+        self.durs_shifted = durs_shifted
 
     def __getitem__(self, index):
         if (not hasattr(index, '__iter__')) and (type(index) is not slice):
@@ -98,9 +95,9 @@ class CoxCCDataset(torch.utils.data.Dataset):
         control_idx = sample_alive_from_dates(fails.values, self.at_risk_dict, self.n_control)
         x_control = tt.TupleTree(self.input.iloc[idx] for idx in control_idx.transpose())
 
-        if self.vaccmap is not None:
-            case_vacc, control_vacc = self.vaccmap[fails.index], self.vaccmap[control_idx]
-            return tt.tuplefy(x_case, x_control, case_vacc, control_vacc).to_tensor()
+        if self.durs_shifted is not None:
+            case_durs, control_durs = self.durs_shifted[fails.index], self.durs_shifted[control_idx]
+            return tt.tuplefy(x_case, x_control, case_durs, control_durs).to_tensor()
 
         return tt.tuplefy(x_case, x_control).to_tensor()
 
@@ -109,25 +106,27 @@ class CoxCCDataset(torch.utils.data.Dataset):
 
 
 class CoxTimeDataset(CoxCCDataset):
-    def __init__(self, input, durations, events, n_control=1, starts=None, vaccmap=None, dummy_val=-10):
-        super().__init__(input, durations, events, n_control, starts=starts, vaccmap=vaccmap)
+    def __init__(self, input, durations, events, n_control=1, starts=None, durs_shifted=None):
+        super().__init__(input, durations, events, n_control, starts=starts, durs_shifted=durs_shifted)
         self.durations_tensor = tt.tuplefy(self.durations.values.reshape(-1, 1)).to_tensor()
-        self.dummy_val = dummy_val
+
+        if durs_shifted is not None:
+            self.durs_shifted_tensor = tt.tuplefy(self.durs_shifted.values.reshape(-1, 1)).to_tensor()
 
     def __getitem__(self, index):
         if not hasattr(index, '__iter__'):
             index = [index]
-        durations = self.durations_tensor.iloc[index][0]
+        durations = self.durations_tensor.iloc[index]
 
-        if self.vaccmap is None:
+        if self.durs_shifted is None:
             case, control = super().__getitem__(index)
             case = case + durations
             control = control.apply_nrec(lambda x: x + durations)
         else:
             # mask unvaccinated durations with a dummy value
-            case, control, case_vacc, control_vacc = super().__getitem__(index)
-            case = case + mask_duration(durations, case_vacc, dummy=self.dummy_val)
-            control = tt.TupleTree(control[idx] + mask_duration(durations, control_vacc[idx], dummy=self.dummy_val)
+            case, control, case_durs, control_durs = super().__getitem__(index)
+            case = case + self.durs_shifted[case_durs]
+            control = tt.TupleTree(control[idx] + self.durs_shifted[control_durs[idx]]
                                    for idx in range(len(control)))
 
         return tt.tuplefy(case, control)
