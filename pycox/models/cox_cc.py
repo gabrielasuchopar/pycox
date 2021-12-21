@@ -34,9 +34,9 @@ class _CoxCCBase(models.cox._CoxBase):
         Returns:
             TrainingLogger -- Training log
         """
-        target, starts, durs_shifted = self.split_target_starts(target) if use_starts else (target, None, None)
+        target, starts, vaccmap = self.split_target_starts(target) if use_starts else (target, None, None)
         input, target = self._sorted_input_target(input, target)
-        target = (*target, starts, durs_shifted) if starts is not None else target
+        target = (*target, starts, vaccmap) if starts is not None else target
 
         if shrink is not None:
             self.loss.shrink = shrink
@@ -81,9 +81,9 @@ class _CoxCCBase(models.cox._CoxBase):
     @staticmethod
     def split_target_starts(target):
         # get starts from target if applicable
-        durations, events, starts, durs_shifted = target
+        durations, events, starts, vaccmap = target
         target = durations, events
-        return target, starts, durs_shifted
+        return target, starts, vaccmap
 
     def make_dataloader(self, data, batch_size, shuffle=True, num_workers=0, n_control=1, use_starts=False):
         """Dataloader for training. Data is on the form (input, target), where
@@ -102,13 +102,13 @@ class _CoxCCBase(models.cox._CoxBase):
             dataloader -- Dataloader for training.
         """
         input, target = data
-        target, starts, durs_shifted = self.split_target_starts(target) if use_starts else (target, None, None)
+        target, starts, vaccmap = self.split_target_starts(target) if use_starts else (target, None, None)
 
         input, target = self._sorted_input_target(input, target)
         durations, events = target
 
         dataset = self.make_dataset(input, durations, events,
-                                    n_control=n_control, starts=starts, durs_shifted=durs_shifted)
+                                    n_control=n_control, starts=starts, vaccmap=vaccmap)
         dataloader = tt.data.DataLoaderBatch(dataset, batch_size=batch_size,
                                              shuffle=shuffle, num_workers=num_workers)
         return dataloader

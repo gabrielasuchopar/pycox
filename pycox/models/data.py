@@ -76,7 +76,7 @@ class DurationSortedDataset(tt.data.DatasetTuple):
 
 
 class CoxCCDataset(torch.utils.data.Dataset):
-    def __init__(self, input, durations, events, n_control=1, starts=None, durs_shifted=None):
+    def __init__(self, input, durations, events, n_control=1, starts=None, vaccmap=None):
         df_train_target = pd.DataFrame(dict(duration=durations, event=events))
         self.durations = df_train_target.loc[lambda x: x['event'] == 1]['duration']
         self.at_risk_dict = make_at_risk_dict(durations, starts=starts)
@@ -85,7 +85,11 @@ class CoxCCDataset(torch.utils.data.Dataset):
         assert type(self.durations) is pd.Series
         self.n_control = n_control
 
-        self.durs_shifted = durs_shifted
+        self.starts = starts
+        if vaccmap.dtype == np.bool:
+            self.vaccmap = (~vaccmap).astype(int).to_numpy()
+        else:
+            self.vaccmap = vaccmap
 
     def __getitem__(self, index):
         if (not hasattr(index, '__iter__')) and (type(index) is not slice):
@@ -95,9 +99,11 @@ class CoxCCDataset(torch.utils.data.Dataset):
         control_idx = sample_alive_from_dates(fails.values, self.at_risk_dict, self.n_control)
         x_control = tt.TupleTree(self.input.iloc[idx] for idx in control_idx.transpose())
 
-        if self.durs_shifted is not None:
-            case_durs, control_durs = self.durs_shifted[fails.index], self.durs_shifted[control_idx]
-            return tt.tuplefy(x_case, x_control, case_durs, control_durs).to_tensor()
+        if self.starts is not None:
+            case_vacc, control_vacc = self.vaccmap[fails.index], self.vaccmap[control_idx.transpose()]
+            case_durs, control_durs = self.starts[fails.index], self.starts[control_idx.transpose()]
+            return tt.tuplefy(x_case, x_control,
+                              case_durs, control_durs, case_vacc, control_vacc).to_tensor()
 
         return tt.tuplefy(x_case, x_control).to_tensor()
 
@@ -106,30 +112,37 @@ class CoxCCDataset(torch.utils.data.Dataset):
 
 
 class CoxTimeDataset(CoxCCDataset):
-    def __init__(self, input, durations, events, n_control=1, starts=None, durs_shifted=None):
-        super().__init__(input, durations, events, n_control, starts=starts, durs_shifted=durs_shifted)
+    def __init__(self, input, durations, events, n_control=1, starts=None, vaccmap=None):
+        super().__init__(input, durations, events, n_control, starts=starts, vaccmap=vaccmap)
         self.durations_tensor = tt.tuplefy(self.durations.values.reshape(-1, 1)).to_tensor()
-
-        if durs_shifted is not None:
-            self.durs_shifted_tensor = tt.tuplefy(self.durs_shifted.values.reshape(-1, 1)).to_tensor()
+        self.min_dur = torch.tensor(durations.min())
 
     def __getitem__(self, index):
         if not hasattr(index, '__iter__'):
             index = [index]
         durations = self.durations_tensor.iloc[index]
 
-        if self.durs_shifted is None:
+        if self.starts is None:
             case, control = super().__getitem__(index)
             case = case + durations
             control = control.apply_nrec(lambda x: x + durations)
         else:
             # mask unvaccinated durations with a dummy value
-            case, control, case_durs, control_durs = super().__getitem__(index)
-            case = case + self.durs_shifted[case_durs]
-            control = tt.TupleTree(control[idx] + self.durs_shifted[control_durs[idx]]
+            case, control, case_durs, control_durs, case_vacc, control_vacc = super().__getitem__(index)
+            case = case + self.shift_duration(durations, case_durs, case_vacc)
+            control = tt.TupleTree(control[idx] + self.shift_duration(durations, control_durs[idx], control_vacc[idx])
                                    for idx in range(len(control)))
 
         return tt.tuplefy(case, control)
+
+
+    def shift_duration(self, durs, starts, vacc):
+        res = durs[0] - starts[:, np.newaxis] + self.min_dur
+
+        vacc = np.nonzero(vacc)
+        res[vacc] = self.min_dur
+
+        return tt.tuplefy(res)
 
 
 def mask_duration(dur, vaccmap, dummy=-10):
