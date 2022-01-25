@@ -57,7 +57,7 @@ class CoxTime(models.cox_cc._CoxCCBase):
         return surv
 
     def compute_baseline_hazards(self, input=None, target=None, max_duration=None, sample=None, batch_size=8224,
-                                set_hazards=True, eval_=True, num_workers=0):
+                                set_hazards=True, eval_=True, num_workers=0, verbose=False):
         if (input is None) and (target is None):
             if not hasattr(self, 'training_data'):
                 raise ValueError('Need to fit, or supply a input and target to this function.')
@@ -70,13 +70,14 @@ class CoxTime(models.cox_cc._CoxCCBase):
                 df = df.sample(frac=sample)
             df = df.sort_values(self.duration_col)
         input = tt.tuplefy(input).to_numpy().iloc[df.index.values]
-        base_haz = self._compute_baseline_hazards(input, df, max_duration, batch_size, eval_, num_workers)
+        base_haz = self._compute_baseline_hazards(input, df, max_duration, batch_size, eval_, num_workers,
+                                                  verbose=verbose)
         if set_hazards:
             self.compute_baseline_cumulative_hazards(set_hazards=True, baseline_hazards_=base_haz)
         return base_haz
 
     def _compute_baseline_hazards(self, input, df_train_target, max_duration, batch_size, eval_=True,
-                                  num_workers=0):
+                                  num_workers=0, verbose=False):
         if max_duration is None:
             max_duration = np.inf
         def compute_expg_at_risk(ix, t):
@@ -94,9 +95,15 @@ class CoxTime(models.cox_cc._CoxCCBase):
                  [self.duration_col]
                  .loc[lambda x: x <= max_duration]
                  .drop_duplicates(keep='first'))
-        at_risk_sum = (pd.Series([compute_expg_at_risk(ix, t) for ix, t in times.iteritems()],
-                                 index=times.values)
-                       .rename('at_risk_sum'))
+
+        at_risk_sum = []
+        for ix, t in times.iteritems():
+            if verbose:
+                print(ix, t)
+            at_risk_sum.append(compute_expg_at_risk(ix, t))
+
+        at_risk_sum = pd.Series(at_risk_sum, index=times.values).rename('at_risk_sum')
+
         events = (df
                   .groupby(self.duration_col)
                   [[self.event_col]]
