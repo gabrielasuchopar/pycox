@@ -85,6 +85,10 @@ class _CoxCCBase(models.cox._CoxBase):
         target = durations, events
         return target, starts, vaccmap
 
+    def target_to_df(self, target):
+        target, _, _ = self.split_target_starts(target)
+        return super().target_to_df(target)
+
     def make_dataloader(self, data, batch_size, shuffle=True, num_workers=0, n_control=1, use_starts=False):
         """Dataloader for training. Data is on the form (input, target), where
         target is (durations, events).
