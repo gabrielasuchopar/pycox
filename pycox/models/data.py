@@ -1,3 +1,4 @@
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -21,12 +22,31 @@ def sample_alive_from_dates(dates, at_risk_dict, n_control=1):
         samp[it, :] = at_risk_dict[time][idx[:, it]]
     return samp
 
-def make_at_risk_dict(durations, starts=None):
+def make_at_risk_dict(durations):
     """Create dict(duration: indices) from sorted df.
     A dict mapping durations to indices.
     For each time => index of all individual alive.
-    If `starts` is provided, the "birthdate" of an event is considered.
     
+    Arguments:
+        durations {np.arrary} -- durations.
+    """
+    assert type(durations) is np.ndarray, 'Need durations to be a numpy array'
+    durations = pd.Series(durations)
+    assert durations.is_monotonic_increasing, 'Requires durations to be monotonic'
+    allidx = durations.index.values
+    keys = durations.drop_duplicates(keep='first')
+    at_risk_dict = dict()
+    for ix, t in keys.iteritems():
+        at_risk_dict[t] = allidx[ix:]
+    return at_risk_dict
+
+
+def make_at_risk_dict_with_starts(durations, starts):
+    """Create dict(duration: indices) from sorted df.
+    A dict mapping durations to indices.
+    For each time => index of all individual alive.
+    The vector `starts` indicates the "birthdate" of the subject (i.e. it is not at risk before this time).
+
     Arguments:
         durations {np.array} -- durations.
         starts {np.array} -- event starts.
@@ -38,24 +58,23 @@ def make_at_risk_dict(durations, starts=None):
     keys = durations.drop_duplicates(keep='first')
     at_risk_dict = dict()
 
-    if starts is not None:
-        assert type(starts) is np.ndarray, 'Need starts to be a numpy array'
-        start_ids = np.argsort(starts)
-        starts = starts[start_ids]
+    assert type(starts) is np.ndarray, 'Need starts to be a numpy array'
+    start_ids = np.argsort(starts)
+    starts = starts[start_ids]
 
     for i, (ix, t) in enumerate(keys.iteritems()):
         print(i, ix, t)
         at_risk_dict[t] = allidx[ix:]
 
-        if starts is not None:
-            invalids = starts > t
-            min_id = np.argmax(invalids)
-            # no need to drop anything anymore
-            if not invalids[min_id]:
-                continue
+        # remove individuals that were not born yet
+        invalids = starts > t
+        min_id = np.argmax(invalids)
+        # no need to drop anything anymore
+        if not invalids[min_id]:
+            continue
 
-            drop_ids = start_ids[min_id:]
-            at_risk_dict[t] = np.setdiff1d(at_risk_dict[t], drop_ids)
+        drop_ids = start_ids[min_id:]
+        at_risk_dict[t] = np.setdiff1d(at_risk_dict[t], drop_ids)
 
     return at_risk_dict
 
@@ -76,20 +95,14 @@ class DurationSortedDataset(tt.data.DatasetTuple):
 
 
 class CoxCCDataset(torch.utils.data.Dataset):
-    def __init__(self, input, durations, events, n_control=1, starts=None, vaccmap=None):
+    def __init__(self, input, durations, events, n_control=1):
         df_train_target = pd.DataFrame(dict(duration=durations, event=events))
         self.durations = df_train_target.loc[lambda x: x['event'] == 1]['duration']
-        self.at_risk_dict = make_at_risk_dict(durations, starts=starts)
+        self.at_risk_dict = make_at_risk_dict(durations)
 
         self.input = tt.tuplefy(input)
         assert type(self.durations) is pd.Series
         self.n_control = n_control
-
-        self.starts = starts
-        if vaccmap.dtype == np.bool:
-            self.vaccmap = (~vaccmap).astype(int).to_numpy()
-        else:
-            self.vaccmap = vaccmap
 
     def __getitem__(self, index):
         if (not hasattr(index, '__iter__')) and (type(index) is not slice):
@@ -98,13 +111,6 @@ class CoxCCDataset(torch.utils.data.Dataset):
         x_case = self.input.iloc[fails.index]
         control_idx = sample_alive_from_dates(fails.values, self.at_risk_dict, self.n_control)
         x_control = tt.TupleTree(self.input.iloc[idx] for idx in control_idx.transpose())
-
-        if self.starts is not None:
-            case_vacc, control_vacc = self.vaccmap[fails.index], self.vaccmap[control_idx.transpose()]
-            case_durs, control_durs = self.starts[fails.index], self.starts[control_idx.transpose()]
-            return tt.tuplefy(x_case, x_control,
-                              case_durs, control_durs, case_vacc, control_vacc).to_tensor()
-
         return tt.tuplefy(x_case, x_control).to_tensor()
 
     def __len__(self):
@@ -112,47 +118,96 @@ class CoxCCDataset(torch.utils.data.Dataset):
 
 
 class CoxTimeDataset(CoxCCDataset):
-    def __init__(self, input, durations, events, n_control=1, starts=None, vaccmap=None):
-        super().__init__(input, durations, events, n_control, starts=starts, vaccmap=vaccmap)
+    def __init__(self, input, durations, events, n_control=1):
+        super().__init__(input, durations, events, n_control)
         self.durations_tensor = tt.tuplefy(self.durations.values.reshape(-1, 1)).to_tensor()
-        self.min_dur = torch.tensor(durations.min())
 
     def __getitem__(self, index):
         if not hasattr(index, '__iter__'):
             index = [index]
         durations = self.durations_tensor.iloc[index]
-
-        if self.starts is None:
-            case, control = super().__getitem__(index)
-            case = case + durations
-            control = control.apply_nrec(lambda x: x + durations)
-        else:
-            # mask unvaccinated durations with a dummy value
-            case, control, case_durs, control_durs, case_vacc, control_vacc = super().__getitem__(index)
-            case = case + self.shift_duration(durations, case_durs, case_vacc)
-            control = tt.TupleTree(control[idx] + self.shift_duration(durations, control_durs[idx], control_vacc[idx])
-                                   for idx in range(len(control)))
-
+        case, control = super().__getitem__(index)
+        case = case + durations
+        control = control.apply_nrec(lambda x: x + durations)
         return tt.tuplefy(case, control)
 
 
+class CoxVaccDataset(torch.utils.data.Dataset):
+    def __init__(self, input, time_var_input, durations, events, starts, vaccmap, n_control=1, cached_dict=None):
+        # events and durations
+        df_train_target = pd.DataFrame(dict(duration=durations, event=events))
+        self.durations = df_train_target.loc[lambda x: x['event'] == 1]['duration']
+        assert type(self.durations) is pd.Series
+
+        self.durations_tensor = tt.tuplefy(self.durations.values.reshape(-1, 1)).to_tensor()
+        self.min_dur = torch.tensor(durations.min())
+
+        # construct at risk dict
+        if cached_dict is None:
+            self.at_risk_dict = make_at_risk_dict_with_starts(durations, starts)
+        else:
+            self.at_risk_dict = cached_dict
+
+        # input is separated to ordinary and time dependant variable
+        self.input = tt.tuplefy(torch.Tensor(input))
+        self.time_var_input = tt.tuplefy(torch.Tensor(time_var_input))
+
+        self.n_control = n_control
+
+        # vacc related info
+        self.starts = starts
+        if vaccmap.dtype == np.bool:
+            self.vaccmap = (~vaccmap).astype(int).to_numpy()
+        else:
+            warnings.warn("Passing vaccmap that does not have type bool.")
+            self.vaccmap = vaccmap
+
+    def __getitem__(self, index):
+        if (not hasattr(index, '__iter__')) and (type(index) is not slice):
+            index = [index]
+
+        durations = self.durations_tensor.iloc[index]
+        fails = self.durations.iloc[index]
+        x_case, x_ctrl, case_starts, ctrl_starts, case_vacc, ctrl_vacc = self.get_case_control(fails, durations)
+
+        # mask unvaccinated durations with a dummy value
+        x_case = x_case + self.shift_duration(durations, case_starts[:, np.newaxis], case_vacc)
+        x_ctrl = tt.TupleTree(x_ctrl[idx] + \
+                              self.shift_duration(durations, ctrl_starts[idx][:, np.newaxis], ctrl_vacc[idx])
+                              for idx in range(len(x_ctrl)))
+
+        return tt.tuplefy(x_case, x_ctrl).to_tensor()
+
+    def get_case_control(self, fails, durs):
+        control_idx = sample_alive_from_dates(fails.values, self.at_risk_dict, self.n_control)
+
+        # get vacc info
+        case_vacc, control_vacc = self.vaccmap[fails.index], self.vaccmap[control_idx.transpose()]
+        case_starts, control_starts = self.starts[fails.index], self.starts[control_idx.transpose()]
+
+        concat_dur = lambda x, y: tt.tuplefy(torch.concat([x, y], dim=1))
+        # sample x features of case/control, shift the time dependents
+        x_case = concat_dur(self.input.iloc[fails.index][0],
+                            self.shift_duration(durs, self.time_var_input.iloc[fails.index][0], case_vacc)[0])
+
+        x_control = tt.TupleTree(
+            concat_dur(self.input.iloc[idx][0],
+                       self.shift_duration(durs, self.time_var_input.iloc[idx][0], control_vacc)[0])  #TODO je control vacc dobře
+            for idx in control_idx.transpose()
+        )
+
+        return x_case, x_control, case_starts, control_starts, case_vacc, control_vacc
+
     def shift_duration(self, durs, starts, vacc):
-        res = durs[0] - starts[:, np.newaxis] + self.min_dur
+        res = durs[0] - starts + self.min_dur
 
         vacc = np.nonzero(vacc)
         res[vacc] = self.min_dur
 
         return tt.tuplefy(res)
 
-
-def mask_duration(dur, vaccmap, dummy=-10):
-    dur = dur.detach().clone()
-    if len(vaccmap) != len(dur):
-        return tt.tuplefy(dur)
-
-    vaccmap = np.nonzero(vaccmap)
-    dur[vaccmap] = dummy
-    return tt.tuplefy(dur)
+    def __len__(self):
+        return len(self.durations)
 
 
 @numba.njit

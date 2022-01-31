@@ -6,14 +6,15 @@ from pycox import models
 class _CoxCCBase(models.cox._CoxBase):
     make_dataset = NotImplementedError
 
-    def __init__(self, net, optimizer=None, device=None, shrink=0., loss=None):
+    def __init__(self, net, optimizer=None, device=None, shrink=0., loss=None, sort_in_fit=True):
         if loss is None:
             loss = models.loss.CoxCCLoss(shrink)
         super().__init__(net, loss, optimizer, device)
+        self.sort_in_fit = sort_in_fit
 
     def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
             num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
-            n_control=1, shrink=None, use_starts=False, **kwargs):
+            n_control=1, shrink=None, **kwargs):
         """Fit  model with inputs and targets. Where 'input' is the covariates, and
         'target' is a tuple with (durations, events).
         
@@ -34,15 +35,14 @@ class _CoxCCBase(models.cox._CoxBase):
         Returns:
             TrainingLogger -- Training log
         """
-        target, starts, vaccmap = self.split_target_starts(target) if use_starts else (target, None, None)
-        input, target = self._sorted_input_target(input, target)
-        target = (*target, starts, vaccmap) if starts is not None else target
+        if self.sort_in_fit:
+            input, target = self._sorted_input_target(input, target)
 
         if shrink is not None:
             self.loss.shrink = shrink
         return super().fit(input, target, batch_size, epochs, callbacks, verbose,
                            num_workers, shuffle, metrics, val_data, val_batch_size,
-                           n_control=n_control, use_starts=use_starts, **kwargs)
+                           n_control=n_control, **kwargs)
 
     def compute_metrics(self, input, metrics):
         if (self.loss is None) and (self.loss in metrics.values()):
@@ -77,19 +77,8 @@ class _CoxCCBase(models.cox._CoxBase):
         """
         dataloader = super().make_dataloader(input, batch_size, shuffle, num_workers)
         return dataloader
-
-    @staticmethod
-    def split_target_starts(target):
-        # get starts from target if applicable
-        durations, events, starts, vaccmap = target
-        target = durations, events
-        return target, starts, vaccmap
-
-    def target_to_df(self, target):
-        target, _, _ = self.split_target_starts(target)
-        return super().target_to_df(target)
-
-    def make_dataloader(self, data, batch_size, shuffle=True, num_workers=0, n_control=1, use_starts=False):
+    
+    def make_dataloader(self, data, batch_size, shuffle=True, num_workers=0, n_control=1):
         """Dataloader for training. Data is on the form (input, target), where
         target is (durations, events).
         
@@ -105,14 +94,9 @@ class _CoxCCBase(models.cox._CoxBase):
         Returns:
             dataloader -- Dataloader for training.
         """
-        input, target = data
-        target, starts, vaccmap = self.split_target_starts(target) if use_starts else (target, None, None)
-
-        input, target = self._sorted_input_target(input, target)
+        input, target = self._sorted_input_target(*data)
         durations, events = target
-
-        dataset = self.make_dataset(input, durations, events,
-                                    n_control=n_control, starts=starts, vaccmap=vaccmap)
+        dataset = self.make_dataset(input, durations, events, n_control)
         dataloader = tt.data.DataLoaderBatch(dataset, batch_size=batch_size,
                                              shuffle=shuffle, num_workers=num_workers)
         return dataloader
