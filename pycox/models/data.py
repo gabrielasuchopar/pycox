@@ -150,7 +150,7 @@ class CoxVaccDataset(torch.utils.data.Dataset):
 
         # input is separated to ordinary and time dependant variable
         self.input = tt.tuplefy(torch.Tensor(input))
-        self.time_var_input = tt.tuplefy(torch.Tensor(time_var_input))
+        self.time_var_input = tt.tuplefy(torch.Tensor(time_var_input)) if time_var_input is not None else None
 
         self.n_control = n_control
 
@@ -185,18 +185,25 @@ class CoxVaccDataset(torch.utils.data.Dataset):
         case_vacc, control_vacc = self.vaccmap[fails.index], self.vaccmap[control_idx.transpose()]
         case_starts, control_starts = self.starts[fails.index], self.starts[control_idx.transpose()]
 
-        concat_dur = lambda x, y: tt.tuplefy(torch.concat([x, y], dim=1))
         # sample x features of case/control, shift the time dependents
-        x_case = concat_dur(self.input.iloc[fails.index][0],
-                            self.shift_duration(durs, self.time_var_input.iloc[fails.index][0], case_vacc)[0])
+        x_case = self._integrate_time_vars(durs, fails.index, case_vacc)
 
         x_control = tt.TupleTree(
-            concat_dur(self.input.iloc[idx][0],
-                       self.shift_duration(durs, self.time_var_input.iloc[idx][0], control_vacc)[0])  #TODO je control vacc dobře
-            for idx in control_idx.transpose()
+            self._integrate_time_vars(durs, idx, vacc)  #TODO je control vacc dobře
+            for idx, vacc in zip(control_idx.transpose(), control_vacc)
         )
 
         return x_case, x_control, case_starts, control_starts, case_vacc, control_vacc
+
+    def _integrate_time_vars(self, durs, idx, vaccmap):
+        ordinary_vars = self.input.iloc[idx]
+        if self.time_var_input is None:
+            return ordinary_vars
+
+        time_vars = self.time_var_input.iloc[idx]
+        time_vars = self.shift_duration(durs, time_vars[0], vaccmap)
+
+        return tt.tuplefy(torch.concat([ordinary_vars[0], time_vars[0]], dim=1))
 
     def shift_duration(self, durs, starts, vacc):
         res = durs[0] - starts + self.min_dur

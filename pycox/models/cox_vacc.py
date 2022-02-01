@@ -13,6 +13,20 @@ class CoxVacc(models.cox_time.CoxTime):
         self.train_dict = train_dict
         self.val_dict = val_dict
 
+    def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
+            num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
+            n_control=1, shrink=None, time_var_input=None, val_time_var_input=None, **kwargs):
+
+        input = input, time_var_input
+        if val_data is not None:
+            val_i, val_t = val_data
+            val_i = val_i, val_time_var_input
+            val_data = val_i, val_t
+
+        return super().fit(input, target, batch_size=batch_size, epochs=epochs, callbacks=callbacks, verbose=verbose,
+            num_workers=num_workers, shuffle=shuffle, metrics=metrics, val_data=val_data, val_batch_size=val_batch_size,
+            n_control=n_control, shrink=shrink, **kwargs)
+
     @staticmethod
     def split_target_starts(target):
         # get starts from target if applicable
@@ -43,11 +57,14 @@ class CoxVacc(models.cox_time.CoxTime):
         """
         input, target = data
         idx_sort = self._get_sort_idx(self.split_target_starts(target)[0])
-        input = [tt.tuplefy(i).iloc[idx_sort][0] for i in input]
-        target = [tt.tuplefy(t).iloc[idx_sort][0] for t in target[:-1]] + [target[-1]]
+        sort_a_tupletree = lambda t: tt.tuplefy(t).iloc[idx_sort][0]
+
+        target = [sort_a_tupletree(t) for t in target[:-1]] + [target[-1]]
+        input, time_var_input = input
+        input = sort_a_tupletree(input)
+        time_var_input = sort_a_tupletree(time_var_input) if time_var_input is not None else None
 
         # split tuples to components
-        input, time_var_input = input
         target, starts, vaccmap, is_val = self.split_target_starts(target)
         durations, events = target
 
