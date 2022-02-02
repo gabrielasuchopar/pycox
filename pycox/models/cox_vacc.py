@@ -1,6 +1,8 @@
 import numpy as np
+import torch
 import torchtuples as tt
 from pycox import models
+from pycox.models.data import combine_with_time_vars
 
 
 class CoxVacc(models.cox_time.CoxTime):
@@ -8,10 +10,11 @@ class CoxVacc(models.cox_time.CoxTime):
 
     def __init__(self, net, optimizer=None, device=None, shrink=0., labtrans=None, loss=None,
                  train_dict=None, val_dict=None):
-        super().__init__(net, optimizer=optimizer, device=device, shrink=shrink, labtrans=labtrans, loss=loss,
-                         sort_in_fit=False)
+        super().__init__(net, optimizer=optimizer, device=device, shrink=shrink, labtrans=labtrans, loss=loss)
         self.train_dict = train_dict
         self.val_dict = val_dict
+        self.training_data = None
+        self.min_duration = None
 
     def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
             num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
@@ -22,6 +25,14 @@ class CoxVacc(models.cox_time.CoxTime):
             val_i, val_t = val_data
             val_i = val_i, val_time_var_input
             val_data = val_i, val_t
+
+        # get sorted input data
+        idx_sort = self._get_sort_idx(self.split_target_starts(target)[0])
+        input, target = self._sorted_input_target(input, target, idx_sort=idx_sort)
+        self.training_data = tt.tuplefy(input, target)
+
+        durations, _ = self.split_target_starts(target)[0]
+        self.min_duration = durations.min().astype(np.float32)
 
         return super().fit(input, target, batch_size=batch_size, epochs=epochs, callbacks=callbacks, verbose=verbose,
             num_workers=num_workers, shuffle=shuffle, metrics=metrics, val_data=val_data, val_batch_size=val_batch_size,
@@ -37,6 +48,19 @@ class CoxVacc(models.cox_time.CoxTime):
     def target_to_df(self, target):
         target, _, _, _ = self.split_target_starts(target)
         return super().target_to_df(target)
+
+    @staticmethod
+    def _sorted_input_target(input, target, idx_sort=None):
+        if idx_sort is None:
+            return input, target
+
+        sort_a_tupletree = lambda t: tt.tuplefy(t).iloc[idx_sort][0]
+
+        target = [sort_a_tupletree(t) for t in target[:-1]] + [target[-1]]
+        input, time_var_input = input
+        input = sort_a_tupletree(input)
+        time_var_input = sort_a_tupletree(time_var_input) if time_var_input is not None else None
+        return (input, time_var_input), target
 
     def make_dataloader(self, data, batch_size, shuffle=True, num_workers=0, n_control=1):
         """Dataloader for training. Data is on the form (input, target), where
@@ -57,14 +81,10 @@ class CoxVacc(models.cox_time.CoxTime):
         """
         input, target = data
         idx_sort = self._get_sort_idx(self.split_target_starts(target)[0])
-        sort_a_tupletree = lambda t: tt.tuplefy(t).iloc[idx_sort][0]
-
-        target = [sort_a_tupletree(t) for t in target[:-1]] + [target[-1]]
-        input, time_var_input = input
-        input = sort_a_tupletree(input)
-        time_var_input = sort_a_tupletree(time_var_input) if time_var_input is not None else None
+        input, target = self._sorted_input_target(input, target, idx_sort=idx_sort)
 
         # split tuples to components
+        input, time_var_input = input
         target, starts, vaccmap, is_val = self.split_target_starts(target)
         durations, events = target
 
@@ -74,7 +94,7 @@ class CoxVacc(models.cox_time.CoxTime):
             saved_dict = self.train_dict
 
         dataset = self.make_dataset(input, time_var_input, durations, events, starts, vaccmap, n_control=n_control,
-                                    cached_dict=saved_dict)
+                                    cached_dict=saved_dict, min_dur=self.min_duration, labtrans=self.labtrans)
 
         dataloader = tt.data.DataLoaderBatch(dataset, batch_size=batch_size,
                                              shuffle=shuffle, num_workers=num_workers)
@@ -91,3 +111,16 @@ class CoxVacc(models.cox_time.CoxTime):
             return None
 
         return idx_sort
+
+    def predict(self, input, time_var_input=None, starts=None, vaccmap=None, **kwargs):
+        input, time = input
+        if time_var_input is not None:
+            vaccmap = (~vaccmap).astype(int).to_numpy()
+            input = combine_with_time_vars(input, time_var_input, starts + time, vaccmap,
+                                           min_dur=self.min_duration, labtrans=self.labtrans)
+
+        time, _ = self.labtrans.transform(time, np.zeros((0,)))
+        return super().predict((input, time), **kwargs)
+
+    def predict_real_time(self):
+        pass

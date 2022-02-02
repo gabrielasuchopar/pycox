@@ -133,14 +133,16 @@ class CoxTimeDataset(CoxCCDataset):
 
 
 class CoxVaccDataset(torch.utils.data.Dataset):
-    def __init__(self, input, time_var_input, durations, events, starts, vaccmap, n_control=1, cached_dict=None):
+    def __init__(self, input, time_var_input, durations, events, starts, vaccmap, n_control=1, cached_dict=None,
+                 min_dur=None, labtrans=None):
+
         # events and durations
         df_train_target = pd.DataFrame(dict(duration=durations, event=events))
         self.durations = df_train_target.loc[lambda x: x['event'] == 1]['duration']
         assert type(self.durations) is pd.Series
 
-        self.durations_tensor = tt.tuplefy(self.durations.values.reshape(-1, 1)).to_tensor()
-        self.min_dur = torch.tensor(durations.min())
+        self.durations_tensor = tt.tuplefy(self.durations.values.reshape(-1, 1))#.to_tensor()
+        self.min_dur = min_dur
 
         # construct at risk dict
         if cached_dict is None:
@@ -149,10 +151,11 @@ class CoxVaccDataset(torch.utils.data.Dataset):
             self.at_risk_dict = cached_dict
 
         # input is separated to ordinary and time dependant variable
-        self.input = tt.tuplefy(torch.Tensor(input))
-        self.time_var_input = tt.tuplefy(torch.Tensor(time_var_input)) if time_var_input is not None else None
+        self.input = tt.tuplefy(input)
+        self.time_var_input = tt.tuplefy(time_var_input) if time_var_input is not None else None
 
         self.n_control = n_control
+        self.labtrans=labtrans
 
         # vacc related info
         self.starts = starts
@@ -171,9 +174,11 @@ class CoxVaccDataset(torch.utils.data.Dataset):
         x_case, x_ctrl, case_starts, ctrl_starts, case_vacc, ctrl_vacc = self.get_case_control(fails, durations)
 
         # mask unvaccinated durations with a dummy value
-        x_case = x_case + self.shift_duration(durations, case_starts[:, np.newaxis], case_vacc)
+        x_case = x_case + shift_duration(durations, case_starts[:, np.newaxis], case_vacc,
+                                         min_dur=self.min_dur, labtrans=self.labtrans)
         x_ctrl = tt.TupleTree(x_ctrl[idx] + \
-                              self.shift_duration(durations, ctrl_starts[idx][:, np.newaxis], ctrl_vacc[idx])
+                              shift_duration(durations, ctrl_starts[idx][:, np.newaxis], ctrl_vacc[idx],
+                                             min_dur=self.min_dur, labtrans=self.labtrans)
                               for idx in range(len(x_ctrl)))
 
         return tt.tuplefy(x_case, x_ctrl).to_tensor()
@@ -201,20 +206,28 @@ class CoxVaccDataset(torch.utils.data.Dataset):
             return ordinary_vars
 
         time_vars = self.time_var_input.iloc[idx]
-        time_vars = self.shift_duration(durs, time_vars[0], vaccmap)
-
-        return tt.tuplefy(torch.concat([ordinary_vars[0], time_vars[0]], dim=1))
-
-    def shift_duration(self, durs, starts, vacc):
-        res = durs[0] - starts + self.min_dur
-
-        vacc = np.nonzero(vacc)
-        res[vacc] = self.min_dur
-
-        return tt.tuplefy(res)
+        return combine_with_time_vars(ordinary_vars[0], time_vars[0], durs, vaccmap,
+                                      min_dur=self.min_dur, labtrans=self.labtrans)
 
     def __len__(self):
         return len(self.durations)
+
+
+def combine_with_time_vars(vars, time_vars, durs, vacc, min_dur=0.0, labtrans=None):
+    time_vars = shift_duration(durs, time_vars, vacc, min_dur=min_dur, labtrans=labtrans)[0]
+    return tt.tuplefy(np.hstack([vars, time_vars]))
+
+
+def shift_duration(durs, starts, vacc, min_dur=0.0, labtrans=None):
+    res = durs[0] - starts + min_dur
+
+    vacc = np.nonzero(vacc)
+    res[vacc] = min_dur
+
+    if labtrans is not None:
+        res, _ = labtrans.transform(res, np.zeros((0,)))
+
+    return tt.tuplefy(res.reshape(starts.shape))
 
 
 @numba.njit

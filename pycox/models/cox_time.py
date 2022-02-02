@@ -36,9 +36,9 @@ class CoxTime(models.cox_cc._CoxCCBase):
     make_dataset = models.data.CoxTimeDataset
     label_transform = LabTransCoxTime
 
-    def __init__(self, net, optimizer=None, device=None, shrink=0., labtrans=None, loss=None, sort_in_fit=True):
+    def __init__(self, net, optimizer=None, device=None, shrink=0., labtrans=None, loss=None):
         self.labtrans = labtrans
-        super().__init__(net, optimizer, device, shrink, loss, sort_in_fit=sort_in_fit)
+        super().__init__(net, optimizer, device, shrink, loss)
 
     def make_dataloader_predict(self, input, batch_size, shuffle=False, num_workers=0):
         input, durations = input

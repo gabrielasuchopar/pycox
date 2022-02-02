@@ -6,11 +6,10 @@ from pycox import models
 class _CoxCCBase(models.cox._CoxBase):
     make_dataset = NotImplementedError
 
-    def __init__(self, net, optimizer=None, device=None, shrink=0., loss=None, sort_in_fit=True):
+    def __init__(self, net, optimizer=None, device=None, shrink=0., loss=None):
         if loss is None:
             loss = models.loss.CoxCCLoss(shrink)
         super().__init__(net, loss, optimizer, device)
-        self.sort_in_fit = sort_in_fit
 
     def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
             num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
@@ -35,8 +34,7 @@ class _CoxCCBase(models.cox._CoxBase):
         Returns:
             TrainingLogger -- Training log
         """
-        if self.sort_in_fit:
-            input, target = self._sorted_input_target(input, target)
+        input, target = self._sorted_input_target(input, target)
 
         if shrink is not None:
             self.loss.shrink = shrink
