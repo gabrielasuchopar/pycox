@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torchtuples as tt
 from pycox import models
-from pycox.models.data import combine_with_time_vars
+from pycox.models.data import combine_with_time_vars, shift_duration
 
 
 class CoxVacc(models.cox_time.CoxTime):
@@ -112,15 +112,20 @@ class CoxVacc(models.cox_time.CoxTime):
 
         return idx_sort
 
-    def predict(self, input, time_var_input=None, starts=None, vaccmap=None, **kwargs):
+    def predict(self, input, starts, vaccmap, time_var_input=None, time_is_real_time=False, **kwargs):
         input, time = input
         if time_var_input is not None:
             vaccmap = (~vaccmap).astype(int).to_numpy()
-            input = combine_with_time_vars(input, time_var_input, starts + time, vaccmap,
+
+            ref_duration = (starts + time) if not time_is_real_time else time
+            input = combine_with_time_vars(input, time_var_input, ref_duration, vaccmap,
                                            min_dur=self.min_duration, labtrans=self.labtrans)
 
-        time, _ = self.labtrans.transform(time, np.zeros((0,)))
-        return super().predict((input, time), **kwargs)
 
-    def predict_real_time(self):
-        pass
+        if time_is_real_time:
+            time = shift_duration(time, starts, vaccmap, min_dur=self.min_duration, labtrans=self.labtrans)[0]
+        else:
+            time, _ = self.labtrans.transform(time, np.zeros((0,)))
+
+        time = time[:, np.newaxis]
+        return super().predict((input, time), **kwargs)
