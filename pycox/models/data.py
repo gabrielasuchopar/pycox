@@ -223,7 +223,7 @@ def shift_duration(durs, starts, vacc, min_dur=0.0, labtrans=None):
 
     vacc = np.nonzero(vacc)
     res[vacc] = min_dur
-    res[res < 0] = 0.0  # mask durations in the future
+    res[res < 0] = min_dur  # mask durations in the future
 
     if labtrans is not None:
         res, _ = labtrans.transform(res, np.zeros((0,)))
