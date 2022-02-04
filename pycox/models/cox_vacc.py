@@ -127,6 +127,6 @@ class CoxVacc(models.cox_time.CoxTime):
             time = shift_duration(time, starts, vaccmap, min_dur=self.min_duration, labtrans=self.labtrans)[0]
         else:
             time, _ = self.labtrans.transform(time, np.zeros((0,)))
+            time = time[:, np.newaxis]
 
-        time = time[:, np.newaxis]
         return super().predict((input, time), **kwargs)
