@@ -215,6 +215,7 @@ class CoxVaccDataset(torch.utils.data.Dataset):
 
 def combine_with_time_vars(vars, time_vars, durs, vacc, min_dur=0.0, labtrans=None):
     time_vars = shift_duration(durs, time_vars, vacc, min_dur=min_dur, labtrans=labtrans)[0]
+    time_vars[time_vars < 0] = 0  # invalid times - larger than current time
     return tt.tuplefy(np.hstack([vars, time_vars]))
 
 
