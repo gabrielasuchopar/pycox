@@ -9,12 +9,12 @@ class CoxVacc(models.cox_time.CoxTime):
     make_dataset = models.data.CoxVaccDataset
 
     def __init__(self, net, optimizer=None, device=None, shrink=0., labtrans=None, loss=None,
-                 train_dict=None, val_dict=None):
+                 train_dict=None, val_dict=None, min_duration=None):
         super().__init__(net, optimizer=optimizer, device=device, shrink=shrink, labtrans=labtrans, loss=loss)
         self.train_dict = train_dict
         self.val_dict = val_dict
         self.training_data = None
-        self.min_duration = None
+        self.min_duration = min_duration
 
     def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
             num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
@@ -116,6 +116,7 @@ class CoxVacc(models.cox_time.CoxTime):
         input, time = input
         if time_var_input is not None:
             vaccmap = (~vaccmap).astype(int).to_numpy()
+            starts = starts if len(starts.shape) > 1 else starts[:, np.newaxis]
 
             ref_duration = (starts + time) if not time_is_real_time else time
             input = combine_with_time_vars(input, time_var_input, ref_duration, vaccmap,
