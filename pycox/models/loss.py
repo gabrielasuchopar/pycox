@@ -676,7 +676,7 @@ class TimeWeightedCoxCCLoss(CoxCCLoss):
         self.duration_weights = duration_weights
 
     def forward(self, g_case: Tensor, g_control: TupleTree, durations) -> Tensor:
-        weights = self.duration_weights.loc[durations]
+        weights = self.duration_weights.loc[durations.detach().cpu()]
         weights = torch.tensor(weights.to_numpy())
         return super().forward(g_case, g_control, weight=weights)
 
