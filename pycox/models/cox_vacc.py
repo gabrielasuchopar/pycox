@@ -12,7 +12,7 @@ class CoxVacc(models.cox_time.CoxTime):
     def __init__(self, net, optimizer=None, device=None, shrink=0., labtrans=None, loss=None,
                  train_dict=None, val_dict=None, min_duration=None, weights=None):
         if loss is None and weights is not None:
-            loss = TimeWeightedCoxCCLoss(weights, shrink=shrink)
+            loss = TimeWeightedCoxCCLoss(weights, shrink=shrink, device=device)
 
         super().__init__(net, optimizer=optimizer, device=device, shrink=shrink, labtrans=labtrans, loss=loss)
         self.train_dict = train_dict

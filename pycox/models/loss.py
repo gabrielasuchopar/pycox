@@ -671,13 +671,15 @@ class CoxCCLoss(torch.nn.Module):
 
 
 class TimeWeightedCoxCCLoss(CoxCCLoss):
-    def __init__(self, duration_weights, shrink: float = 0., clamp: Tuple[float, float] = (-3e+38, 80.)):
+    def __init__(self, duration_weights, shrink: float = 0., clamp: Tuple[float, float] = (-3e+38, 80.),
+                 device=None):
         super().__init__(shrink=shrink, clamp=clamp)
         self.duration_weights = duration_weights
+        self.device = device
 
     def forward(self, g_case: Tensor, g_control: TupleTree, durations) -> Tensor:
         weights = self.duration_weights.loc[durations.detach().cpu()]
-        weights = torch.tensor(weights.to_numpy())
+        weights = torch.tensor(weights.to_numpy()).to(self.device)
         return super().forward(g_case, g_control, weight=weights)
 
 
