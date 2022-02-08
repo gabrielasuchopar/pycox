@@ -366,7 +366,7 @@ def bce_surv_loss(phi: Tensor, idx_durations: Tensor, events: Tensor, reduction:
     return F.binary_cross_entropy_with_logits(phi, y, c, reduction=reduction)
 
 def cox_cc_loss(g_case: Tensor, g_control: Tensor, shrink : float = 0.,
-                clamp: Tuple[float, float] = (-3e+38, 80.)) -> Tensor:
+                clamp: Tuple[float, float] = (-3e+38, 80.), weight=torch.tensor(1.0)) -> Tensor:
     """Torch loss function for the Cox case-control models.
     For only one control, see `cox_cc_loss_single_ctrl` instead.
     
@@ -391,17 +391,17 @@ def cox_cc_loss(g_case: Tensor, g_control: Tensor, shrink : float = 0.,
         shrink_control += ctr.abs().mean()
         ctr = ctr - g_case
         ctr = torch.clamp(ctr, *clamp)  # Kills grads for very bad cases (should instead cap grads!!!).
-        control_sum += torch.exp(ctr)
+        control_sum += torch.exp(ctr) * weight
     loss = torch.log(1. + control_sum)
-    shrink_zero = shrink * (g_case.abs().mean() + shrink_control) / len(g_control)
+    shrink_zero = shrink * (g_case.abs().mean() + shrink_control) / len(g_control) * weight.mean()
     return torch.mean(loss) + shrink_zero.abs()
 
-def cox_cc_loss_single_ctrl(g_case: Tensor, g_control: Tensor, shrink: float = 0.) -> Tensor:
+def cox_cc_loss_single_ctrl(g_case: Tensor, g_control: Tensor, shrink: float = 0., weight=torch.tensor(1.0)) -> Tensor:
     """CoxCC and CoxTime loss, but with only a single control.
     """
-    loss = F.softplus(g_control - g_case).mean()
+    loss = F.softplus((g_control - g_case) * weight).mean()
     if shrink != 0:
-        loss += shrink * (g_case.abs().mean() + g_control.abs().mean())
+        loss += shrink * (g_case.abs().mean() + g_control.abs().mean()) * weight
     return loss
 
 def cox_ph_loss_sorted(log_h: Tensor, events: Tensor, eps: float = 1e-7) -> Tensor:
@@ -646,6 +646,7 @@ class CoxCCLoss(torch.nn.Module):
         super().__init__()
         self.shrink = shrink
         self.clamp = clamp
+        self.def_weight = torch.tensor(1.0)
 
     @property
     def shrink(self) -> float:
@@ -657,14 +658,27 @@ class CoxCCLoss(torch.nn.Module):
             raise ValueError(f"Need shrink to be non-negative, got {shrink}.")
         self._shrink = shrink
 
-    def forward(self, g_case: Tensor, g_control: TupleTree) -> Tensor:
+    def forward(self, g_case: Tensor, g_control: TupleTree, weight=None) -> Tensor:
+        weight = self.def_weight if weight is None else weight
         single = False
         if hasattr(g_control, 'shape'):
              if g_case.shape == g_control.shape:
-                return cox_cc_loss_single_ctrl(g_case, g_control, self.shrink)
+                return cox_cc_loss_single_ctrl(g_case, g_control, self.shrink, weight=weight)
         elif (len(g_control) == 1) and (g_control[0].shape == g_case.shape):
-                return cox_cc_loss_single_ctrl(g_case, g_control[0], self.shrink)
-        return cox_cc_loss(g_case, g_control, self.shrink, self.clamp)
+                return cox_cc_loss_single_ctrl(g_case, g_control[0], self.shrink, weight=weight)
+
+        return cox_cc_loss(g_case, g_control, self.shrink, self.clamp, weight=weight)
+
+
+class TimeWeightedCoxCCLoss(CoxCCLoss):
+    def __init__(self, duration_weights, shrink: float = 0., clamp: Tuple[float, float] = (-3e+38, 80.)):
+        super().__init__(shrink=shrink, clamp=clamp)
+        self.duration_weights = duration_weights
+
+    def forward(self, g_case: Tensor, g_control: TupleTree, durations) -> Tensor:
+        weights = self.duration_weights.loc[durations]
+        weights = torch.tensor(weights.to_numpy())
+        return super().forward(g_case, g_control, weight=weights)
 
 
 class CoxPHLossSorted(torch.nn.Module):

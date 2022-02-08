@@ -3,18 +3,23 @@ import torch
 import torchtuples as tt
 from pycox import models
 from pycox.models.data import combine_with_time_vars, shift_duration
+from pycox.models.loss import TimeWeightedCoxCCLoss
 
 
 class CoxVacc(models.cox_time.CoxTime):
     make_dataset = models.data.CoxVaccDataset
 
     def __init__(self, net, optimizer=None, device=None, shrink=0., labtrans=None, loss=None,
-                 train_dict=None, val_dict=None, min_duration=None):
+                 train_dict=None, val_dict=None, min_duration=None, weights=None):
+        if loss is None and weights is not None:
+            loss = TimeWeightedCoxCCLoss(weights, shrink=shrink)
+
         super().__init__(net, optimizer=optimizer, device=device, shrink=shrink, labtrans=labtrans, loss=loss)
         self.train_dict = train_dict
         self.val_dict = val_dict
         self.training_data = None
         self.min_duration = min_duration
+        self.weighted = weights is not None
 
     def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
             num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
@@ -94,7 +99,8 @@ class CoxVacc(models.cox_time.CoxTime):
             saved_dict = self.train_dict
 
         dataset = self.make_dataset(input, time_var_input, durations, events, starts, vaccmap, n_control=n_control,
-                                    cached_dict=saved_dict, min_dur=self.min_duration, labtrans=self.labtrans)
+                                    cached_dict=saved_dict, min_dur=self.min_duration, labtrans=self.labtrans,
+                                    return_weights=self.weighted)
 
         dataloader = tt.data.DataLoaderBatch(dataset, batch_size=batch_size,
                                              shuffle=shuffle, num_workers=num_workers)
@@ -130,3 +136,24 @@ class CoxVacc(models.cox_time.CoxTime):
             time = time[:, np.newaxis]
 
         return super().predict((input, time), **kwargs)
+
+    def compute_metrics(self, input, metrics):
+        if (self.loss is None) and (self.loss in metrics.values()):
+            raise RuntimeError(f"Need to specify a loss (self.loss). It's currently None")
+        input = self._to_device(input)
+        batch_size = input.lens().flatten().get_if_all_equal()
+        if batch_size is None:
+            raise RuntimeError("All elements in input does not have the same length.")
+        if self.weighted:
+            case, control, weights = input
+        else:
+            case, control = input  # both are TupleTree
+
+        input_all = tt.TupleTree((case,) + control).cat()
+        g_all = self.net(*input_all)
+        g_all = tt.tuplefy(g_all).split(batch_size).flatten()
+        g_case = g_all[0]
+        g_control = g_all[1:]
+        args = (g_case, g_control, weights) if self.weighted else (g_case, g_control)
+        res = {name: metric(*args) for name, metric in metrics.items()}
+        return res

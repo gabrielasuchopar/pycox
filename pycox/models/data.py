@@ -134,7 +134,7 @@ class CoxTimeDataset(CoxCCDataset):
 
 class CoxVaccDataset(torch.utils.data.Dataset):
     def __init__(self, input, time_var_input, durations, events, starts, vaccmap, n_control=1, cached_dict=None,
-                 min_dur=None, labtrans=None):
+                 min_dur=None, labtrans=None, return_weights=False):
 
         # events and durations
         df_train_target = pd.DataFrame(dict(duration=durations, event=events))
@@ -156,6 +156,7 @@ class CoxVaccDataset(torch.utils.data.Dataset):
 
         self.n_control = n_control
         self.labtrans=labtrans
+        self.return_weights = return_weights
 
         # vacc related info
         self.starts = starts
@@ -181,7 +182,10 @@ class CoxVaccDataset(torch.utils.data.Dataset):
                                              min_dur=self.min_dur, labtrans=self.labtrans)
                               for idx in range(len(x_ctrl)))
 
-        return tt.tuplefy(x_case, x_ctrl).to_tensor()
+        if not self.return_weights:
+            return tt.tuplefy(x_case, x_ctrl).to_tensor()
+
+        return tt.tuplefy(x_case, x_ctrl, durations[0][:, 0]).to_tensor()
 
     def get_case_control(self, fails, durs):
         control_idx = sample_alive_from_dates(fails.values, self.at_risk_dict, self.n_control)
