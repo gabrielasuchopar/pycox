@@ -223,7 +223,10 @@ def combine_with_time_vars(vars, time_vars, durs, vacc, min_dur=0.0, labtrans=No
 
 
 def shift_duration(durs, starts, vacc, min_dur=0.0, labtrans=None):
-    res = durs[0] - starts + min_dur
+    if isinstance(durs, tt.TupleTree):
+        durs = durs[0]
+
+    res = durs - starts + min_dur
 
     vacc = np.nonzero(vacc)
     res[vacc] = min_dur
