@@ -122,6 +122,7 @@ class CoxVacc(models.cox_time.CoxTime):
 
     def predict(self, input, starts, vaccmap, time_var_input=None, time_is_real_time=False, **kwargs):
         input, time = input
+        starts = starts if len(starts.shape) > 1 else starts[:, np.newaxis]
         ref_duration = (starts + time) if not time_is_real_time else time
 
         if self.case_count_dict is not None:
@@ -129,8 +130,6 @@ class CoxVacc(models.cox_time.CoxTime):
 
         if time_var_input is not None:
             vaccmap = (~vaccmap).astype(int).to_numpy()
-            starts = starts if len(starts.shape) > 1 else starts[:, np.newaxis]
-
             input = combine_with_time_vars(input, time_var_input, ref_duration, vaccmap,
                                            min_dur=self.min_duration, labtrans=self.labtrans)
 
