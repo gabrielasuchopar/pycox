@@ -134,7 +134,7 @@ class CoxTimeDataset(CoxCCDataset):
 
 class CoxVaccDataset(torch.utils.data.Dataset):
     def __init__(self, input, time_var_input, durations, events, starts, vaccmap, n_control=1, cached_dict=None,
-                 min_dur=None, labtrans=None, return_weights=False):
+                 min_dur=None, labtrans=None, return_weights=False, case_count_dict=None):
 
         # events and durations
         df_train_target = pd.DataFrame(dict(duration=durations, event=events))
@@ -166,6 +166,8 @@ class CoxVaccDataset(torch.utils.data.Dataset):
             warnings.warn("Passing vaccmap that does not have type bool.")
             self.vaccmap = vaccmap
 
+        self.case_count_dict = case_count_dict
+
     def __getitem__(self, index):
         if (not hasattr(index, '__iter__')) and (type(index) is not slice):
             index = [index]
@@ -185,7 +187,7 @@ class CoxVaccDataset(torch.utils.data.Dataset):
         if not self.return_weights:
             return tt.tuplefy(x_case, x_ctrl).to_tensor()
 
-        return tt.tuplefy(x_case, x_ctrl, durations[0][:, 0]).to_tensor()
+        return tt.tuplefy(x_case, x_ctrl, de_tupletree(durations)[:, 0]).to_tensor()
 
     def get_case_control(self, fails, durs):
         control_idx = sample_alive_from_dates(fails.values, self.at_risk_dict, self.n_control)
@@ -206,25 +208,39 @@ class CoxVaccDataset(torch.utils.data.Dataset):
 
     def _integrate_time_vars(self, durs, idx, vaccmap):
         ordinary_vars = self.input.iloc[idx]
+
+        if self.case_count_dict is not None:
+            ordinary_vars = add_case_counts(de_tupletree(durs), de_tupletree(ordinary_vars), self.case_count_dict)
+
         if self.time_var_input is None:
             return ordinary_vars
 
         time_vars = self.time_var_input.iloc[idx]
-        return combine_with_time_vars(ordinary_vars[0], time_vars[0], durs, vaccmap,
+        return combine_with_time_vars(de_tupletree(ordinary_vars), de_tupletree(time_vars), durs, vaccmap,
                                       min_dur=self.min_dur, labtrans=self.labtrans)
 
     def __len__(self):
         return len(self.durations)
 
 
+def de_tupletree(wrapped):
+    if isinstance(wrapped, tt.TupleTree):
+        return wrapped[0]
+    return wrapped
+
+
+def add_case_counts(durations, x_vars, times_dict):
+    times = times_dict.loc[durations.flatten()]
+    return tt.tuplefy(np.hstack([x_vars, times]))
+
+
 def combine_with_time_vars(vars, time_vars, durs, vacc, min_dur=0.0, labtrans=None):
-    time_vars = shift_duration(durs, time_vars, vacc, min_dur=min_dur, labtrans=labtrans)[0]
-    return tt.tuplefy(np.hstack([vars, time_vars]))
+    time_vars = shift_duration(durs, time_vars, vacc, min_dur=min_dur, labtrans=labtrans)
+    return tt.tuplefy(np.hstack([vars, de_tupletree(time_vars)]))
 
 
 def shift_duration(durs, starts, vacc, min_dur=0.0, labtrans=None):
-    if isinstance(durs, tt.TupleTree):
-        durs = durs[0]
+    durs = de_tupletree(durs)
 
     res = durs - starts + min_dur
 

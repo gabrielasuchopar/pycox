@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torchtuples as tt
 from pycox import models
-from pycox.models.data import combine_with_time_vars, shift_duration
+from pycox.models.data import combine_with_time_vars, shift_duration, de_tupletree, add_case_counts
 from pycox.models.loss import TimeWeightedCoxCCLoss
 
 
@@ -10,7 +10,7 @@ class CoxVacc(models.cox_time.CoxTime):
     make_dataset = models.data.CoxVaccDataset
 
     def __init__(self, net, optimizer=None, device=None, shrink=0., labtrans=None, loss=None,
-                 train_dict=None, val_dict=None, min_duration=None, weights=None):
+                 train_dict=None, val_dict=None, min_duration=None, weights=None, case_count_dict=None):
         if loss is None and weights is not None:
             loss = TimeWeightedCoxCCLoss(weights, shrink=shrink, device=device)
 
@@ -20,6 +20,8 @@ class CoxVacc(models.cox_time.CoxTime):
         self.training_data = None
         self.min_duration = min_duration
         self.weighted = weights is not None
+
+        self.case_count_dict = case_count_dict
 
     def fit(self, input, target, batch_size=256, epochs=1, callbacks=None, verbose=True,
             num_workers=0, shuffle=True, metrics=None, val_data=None, val_batch_size=8224,
@@ -100,7 +102,7 @@ class CoxVacc(models.cox_time.CoxTime):
 
         dataset = self.make_dataset(input, time_var_input, durations, events, starts, vaccmap, n_control=n_control,
                                     cached_dict=saved_dict, min_dur=self.min_duration, labtrans=self.labtrans,
-                                    return_weights=self.weighted)
+                                    return_weights=self.weighted, case_count_dict=self.case_count_dict)
 
         dataloader = tt.data.DataLoaderBatch(dataset, batch_size=batch_size,
                                              shuffle=shuffle, num_workers=num_workers)
@@ -120,17 +122,21 @@ class CoxVacc(models.cox_time.CoxTime):
 
     def predict(self, input, starts, vaccmap, time_var_input=None, time_is_real_time=False, **kwargs):
         input, time = input
+        ref_duration = (starts + time) if not time_is_real_time else time
+
+        if self.case_count_dict is not None:
+            input = add_case_counts(ref_duration, de_tupletree(input), self.case_count_dict)
+
         if time_var_input is not None:
             vaccmap = (~vaccmap).astype(int).to_numpy()
             starts = starts if len(starts.shape) > 1 else starts[:, np.newaxis]
 
-            ref_duration = (starts + time) if not time_is_real_time else time
             input = combine_with_time_vars(input, time_var_input, ref_duration, vaccmap,
                                            min_dur=self.min_duration, labtrans=self.labtrans)
 
-
         if time_is_real_time:
-            time = shift_duration(time, starts, vaccmap, min_dur=self.min_duration, labtrans=self.labtrans)[0]
+            time = shift_duration(time, starts, vaccmap, min_dur=self.min_duration, labtrans=self.labtrans)
+            time = de_tupletree(time)
         else:
             time, _ = self.labtrans.transform(time, np.zeros((0,)))
             time = time[:, np.newaxis]
