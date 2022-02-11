@@ -230,7 +230,7 @@ def de_tupletree(wrapped):
 
 
 def add_case_counts(durations, x_vars, times_dict):
-    times = times_dict.loc[durations.flatten()]
+    times = times_dict.loc[durations.flatten().astype(int)]
     return tt.tuplefy(np.hstack([x_vars, times]))
 
 

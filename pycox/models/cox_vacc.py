@@ -130,7 +130,7 @@ class CoxVacc(models.cox_time.CoxTime):
 
         if time_var_input is not None:
             vaccmap = (~vaccmap).astype(int).to_numpy()
-            input = combine_with_time_vars(input, time_var_input, ref_duration, vaccmap,
+            input = combine_with_time_vars(de_tupletree(input), time_var_input, ref_duration, vaccmap,
                                            min_dur=self.min_duration, labtrans=self.labtrans)
 
         if time_is_real_time:
