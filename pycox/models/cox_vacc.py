@@ -137,6 +137,9 @@ class CoxVacc(models.cox_time.CoxTime):
             time = shift_duration(time, starts, vaccmap, min_dur=self.min_duration, labtrans=self.labtrans)
             time = de_tupletree(time)
         else:
+            time += self.min_duration
+            vacc = np.nonzero(vaccmap)
+            time[vacc] = self.min_duration
             time, _ = self.labtrans.transform(time, np.zeros((0,)))
             time = time[:, np.newaxis]
 
