@@ -114,7 +114,7 @@ class CoxVacc(models.cox_time.CoxTime):
         target = tt.tuplefy(target).to_numpy()
         durations, _ = target
 
-        idx_sort = np.argsort(durations)
+        idx_sort = np.argsort(durations, kind='stable')
         if (idx_sort == np.arange(0, len(idx_sort))).all():
             return None
 
