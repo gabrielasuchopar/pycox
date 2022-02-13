@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import torch
 import torchtuples as tt
 from pycox import models
@@ -17,6 +18,9 @@ class CoxVacc(models.cox_time.CoxTime):
         super().__init__(net, optimizer=optimizer, device=device, shrink=shrink, labtrans=labtrans, loss=loss)
         self.train_dict = train_dict
         self.val_dict = val_dict
+
+        self.precomputed_dicts = self.train_dict is not None and self.val_dict is not None
+
         self.training_data = None
         self.min_duration = min_duration
         self.weighted = weights is not None
@@ -104,10 +108,15 @@ class CoxVacc(models.cox_time.CoxTime):
                                     cached_dict=saved_dict, min_dur=self.min_duration, labtrans=self.labtrans,
                                     return_weights=self.weighted, case_count_dict=self.case_count_dict)
 
+        if not self.precomputed_dicts:
+            if is_val:
+                self.val_dict = dataset.at_risk_dict
+            else:
+                self.train_dict = dataset.at_risk_dict
+
         dataloader = tt.data.DataLoaderBatch(dataset, batch_size=batch_size,
                                              shuffle=shuffle, num_workers=num_workers)
         return dataloader
-
 
     @staticmethod
     def _get_sort_idx(target):
@@ -122,14 +131,15 @@ class CoxVacc(models.cox_time.CoxTime):
 
     def predict(self, input, starts, vaccmap, time_var_input=None, time_is_real_time=False, **kwargs):
         input, time = input
+        time = time if len(time.shape) > 1 else time[:, np.newaxis]
         starts = starts if len(starts.shape) > 1 else starts[:, np.newaxis]
         ref_duration = (starts + time) if not time_is_real_time else time
 
         if self.case_count_dict is not None:
             input = add_case_counts(ref_duration, de_tupletree(input), self.case_count_dict)
 
+        vaccmap = (~vaccmap).astype(int).to_numpy()
         if time_var_input is not None:
-            vaccmap = (~vaccmap).astype(int).to_numpy()
             input = combine_with_time_vars(de_tupletree(input), time_var_input, ref_duration, vaccmap,
                                            min_dur=self.min_duration, labtrans=self.labtrans)
 
@@ -167,3 +177,92 @@ class CoxVacc(models.cox_time.CoxTime):
         args = (g_case, g_control, weights) if self.weighted else (g_case, g_control)
         res = {name: metric(*args) for name, metric in metrics.items()}
         return res
+
+    def compute_baseline_hazards(self, input=None, target=None, max_duration=None, sample=None, batch_size=8224,
+                                set_hazards=True, eval_=True, num_workers=0, verbose=False):
+        if (input is None) and (target is None):
+            if not hasattr(self, 'training_data'):
+                raise ValueError('Need to fit, or supply a input and target to this function.')
+            input, target = self.training_data
+
+        df = self.target_to_df(target)
+        if sample is not None:
+            if sample >= 1:
+                df = df.sample(n=sample)
+            else:
+                df = df.sample(frac=sample)
+            input, target = self._sorted_input_target(input, target, idx_sort=df.index)
+
+        base_haz = self._compute_baseline_hazards(input, target, max_duration, batch_size, eval_, num_workers,
+                                                  verbose=verbose)
+        if set_hazards:
+            self.compute_baseline_cumulative_hazards(set_hazards=True, baseline_hazards_=base_haz)
+        return base_haz
+
+    def _compute_expg_at_risk(self, input, target, t, risk_idx=None, batch_size=None, eval_=True, num_workers=0):
+        if risk_idx is not None:
+            input, target = self._sorted_input_target(input, target, idx_sort=risk_idx)  # indexing, not sorting
+
+        x, x_time_var = input
+        _, starts, vaccmap, _ = self.split_target_starts(target)
+
+        n = len(x)
+        t = np.repeat(t, n).reshape(-1, 1).astype('float32')
+        return np.exp(self.predict((x, t), starts, vaccmap, time_var_input=x_time_var, time_is_real_time=True,
+                                   batch_size=batch_size, numpy=True, eval_=eval_,
+                                   num_workers=num_workers)).flatten()
+
+    def _compute_baseline_hazards(self, input, target, max_duration, batch_size, eval_=True,
+                                  num_workers=0, verbose=False):
+        if max_duration is None:
+            max_duration = np.inf
+
+        df = self.target_to_df(target)
+        if not df[self.duration_col].is_monotonic_increasing:
+            raise RuntimeError(f"Need data to be sorted")
+
+        at_risk_sum = []
+        for time, risk_idx in self.train_dict.items():
+            if verbose:
+                print(time, "| at risk: ", len(risk_idx))
+            at_risk_sum.append(self._compute_expg_at_risk(input, target, time, risk_idx=risk_idx, batch_size=batch_size,
+                                                          eval_=eval_, num_workers=num_workers).sum())
+
+        at_risk_sum = pd.Series(at_risk_sum, index=list(self.train_dict.keys())).rename('at_risk_sum')
+
+        events = (df
+                  .groupby(self.duration_col)
+                  [[self.event_col]]
+                  .agg('sum')
+                  .loc[lambda x: x.index <= max_duration])
+        base_haz =  (events
+                     .join(at_risk_sum, how='left', sort=True)
+                     .pipe(lambda x: x[self.event_col] / x['at_risk_sum'])
+                     .fillna(0.)
+                     .rename('baseline_hazards'))
+        return base_haz
+
+    def _predict_cumulative_hazards(self, input, max_duration, batch_size, verbose, baseline_hazards_,
+                                    eval_=True, num_workers=0):
+        if tt.utils.is_dl(input):
+            raise NotImplementedError(f"Prediction with a dataloader as input is not supported ")
+
+        input, target = input
+        max_duration = np.inf if max_duration is None else max_duration
+        baseline_hazards_ = baseline_hazards_.loc[lambda x: x.index <= max_duration]
+        n_rows, n_cols = baseline_hazards_.shape[0], len(input[0])
+        hazards = np.empty((n_rows, n_cols))
+        for idx, t in enumerate(baseline_hazards_.index):
+            if verbose:
+                print(idx, 'of', len(baseline_hazards_))
+            hazards[idx, :] = self._compute_expg_at_risk(input, target, t, batch_size=batch_size, eval_=eval_,
+                                                         num_workers=num_workers)
+        hazards[baseline_hazards_.values == 0] = 0.  # in case hazards are inf here
+        hazards *= baseline_hazards_.values.reshape(-1, 1)
+        return pd.DataFrame(hazards, index=baseline_hazards_.index).cumsum()
+
+    def predict_surv(self, input, max_duration=None, batch_size=8224, numpy=None, verbose=False,
+                     baseline_hazards_=None, eval_=True, num_workers=0):
+        surv = self.predict_surv_df(input, max_duration, batch_size, verbose, baseline_hazards_,
+                                    eval_, num_workers)
+        return surv.values.transpose()
