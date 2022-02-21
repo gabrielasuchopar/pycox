@@ -193,6 +193,10 @@ class CoxVacc(models.cox_time.CoxTime):
                 df = df.sample(frac=sample)
             input, target = self._sorted_input_target(input, target, idx_sort=df.index)
 
+        # input has to be sorted
+        idx_sort = self._get_sort_idx(self.split_target_starts(target)[0])
+        input, target = self._sorted_input_target(input, target, idx_sort=idx_sort)
+
         base_haz = self._compute_baseline_hazards(input, target, max_duration, batch_size, eval_, num_workers,
                                                   verbose=verbose)
         if set_hazards:
