@@ -3,6 +3,7 @@ import pandas as pd
 import torch
 import torchtuples as tt
 from pycox import models
+from pycox.models.cox_cc import _CoxCCBase
 from pycox.models.data import combine_with_time_vars, shift_duration, de_tupletree, add_case_counts
 from pycox.models.loss import TimeWeightedCoxCCLoss
 
@@ -177,6 +178,12 @@ class CoxVacc(models.cox_time.CoxTime):
         args = (g_case, g_control, weights) if self.weighted else (g_case, g_control)
         res = {name: metric(*args) for name, metric in metrics.items()}
         return res
+
+    def predict_surv_df(self, input, max_duration=None, batch_size=8224, verbose=False, baseline_hazards_=None,
+                        eval_=True, num_workers=0):
+        surv = _CoxCCBase.predict_surv_df(self, input, max_duration, batch_size, verbose, baseline_hazards_,
+                                          eval_, num_workers)
+        return surv
 
     def compute_baseline_hazards(self, input=None, target=None, max_duration=None, sample=None, batch_size=8224,
                                 set_hazards=True, eval_=True, num_workers=0, verbose=False):
