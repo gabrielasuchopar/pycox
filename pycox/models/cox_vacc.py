@@ -16,6 +16,9 @@ class CoxVacc(models.cox_time.CoxTime):
         if loss is None and weights is not None:
             loss = TimeWeightedCoxCCLoss(weights, shrink=shrink, device=device)
 
+        if type(net) is str:
+            net = self.load_net(net, map_location=device)
+
         super().__init__(net, optimizer=optimizer, device=device, shrink=shrink, labtrans=labtrans, loss=loss)
         self.train_dict = train_dict
         self.val_dict = val_dict
