@@ -209,11 +209,13 @@ class _CoxBase(models.base.SurvBase):
         path, extension = os.path.splitext(path)
         if extension == "":
             extension = '.pt'
-        super().load_net(path+extension, **kwargs)
+        net = super().load_net(path+extension, **kwargs)
         blh_path = path+'_blh.pickle'
         if os.path.isfile(blh_path):
             self.baseline_hazards_ = pd.read_pickle(blh_path)
             self.baseline_cumulative_hazards_ = self.baseline_hazards_.cumsum()
+
+        return net
 
     def df_to_input(self, df):
         input = df[self.input_cols].values
